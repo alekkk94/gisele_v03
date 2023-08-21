@@ -6,16 +6,37 @@ from shapely.geometry import *
 import rasterio
 import pandas as pd
 from sklearn.cluster import DBSCAN
+import math
 import time
+crs = 32736
+regions = gpd.read_file(os.path.join(r'C:\Users\alekd\Politecnico di Milano\Documentale DENG - Mozambique\Admin','gadm36_MOZ_1.shp'))
+regions_crs=regions.to_crs(crs)
+zambezia_polygon = regions.loc[regions['NAME_1']=='Zambezia','geometry'].values[0][45] #the mainland
+zambezia_polygon_crs = regions_crs.loc[regions_crs['NAME_1']=='Zambezia','geometry'].values[0][45]
 
+#calculate a fake number of substations needed based on the radius of 3km per substation + a bit of slack.
+#basically, considering the inner square of a circle with a radius 3km, we can find that the surface is (3km/sqrt(2))^2
+
+overall_area = zambezia_polygon_crs.area/1000000 #km^2
+
+area_of_substation = (3/math.sqrt(2))**2 #in km^2 considering a radius of 3km
+coef_routing = 0.3 # do something better to account for the fact that we if there are people in the entire circle, the area supplied will be much less
+# then the full surface. Basically, try to consider like a weight based on the amount of points inside that rectangle.
+number_substations_based_on_area = int(overall_area/area_of_substation/coef_routing)
 
 operation = 'Clustering' # 'Clustering' or 'Delaunay'
-crs = 32736
-#Population = gpd.read_file(r'D:\OneDrive - Politecnico di Milano\EPSlab_Com2\gisele_v03\Data\Zambezia\grid_points')
-#Population.drop(['X','Y','LandCover','ID'],axis=1,inplace=True)
-#Population_filtered = Population[Population['Population']>0]
-Population_gdf = gpd.read_file(r'D:\OneDrive - Politecnico di Milano\EPSlab_Com2\gisele_v03\Data\Zambezia\Population_Zambezia')
+
+Population_gdf = gpd.read_file(r'C:\Users\alekd\OneDrive - Politecnico di Milano\PhD studies\Papers\gisele-3 paper\Data\Zambezia\Population_Zambezia')
 Population_gdf= Population_gdf.to_crs('EPSG:'+str(crs))
+load_capita = 20 #Watts
+overall_load = Population_gdf.Population.sum()*load_capita/1000000
+
+number_substations_based_on_power = overall_load/0.4
+location_folder = r'C:\Users\alekd\OneDrive - Politecnico di Milano\PhD studies\Papers\gisele-3 paper\Data\Zambezia'
+Population_gdf, centroids = run_k_means(Population_gdf,int(number_substations_based_on_power),location_folder,crs)
+
+
+
 if operation == 'Clustering':
 
     clustering_option = 'DBSCAN'
@@ -68,3 +89,35 @@ elif operation == 'Delaunay':
     new_lines[new_lines['length']<dist_limit].to_file(r'D:\OneDrive - Politecnico di Milano\EPSlab_Com2\gisele_v03\Data\Zambezia\delaunay1')
 
 #Gi seces liniite so progresivno namaluvanje na dolzinata. Kako se formiraat clasteri, taka pravis presmetki za troshoci za generacisko portfolio i substations.
+
+
+# Clustering analysis in June 2023
+from functions import *
+point_gdf = point_density(point_gdf,calculate_percentiles=False,radius=568)
+point_gdf = point_density(point_gdf,calculate_percentiles=False,radius=1000)
+point_gdf = point_density(point_gdf,calculate_percentiles=False,radius=2000)
+#point_gdf = point_density(point_gdf,calculate_percentiles=False,radius=3000)
+point_gdf = point_density(point_gdf,calculate_percentiles=False,radius=142)
+point_gdf.sort_values(by='Pop_142').reset_index(drop=True)['Pop_142'].plot()
+point_gdf.to_file(r'C:\Users\alekd\PycharmProjects\gisele_v03\Data\Zambezia_clustering_JUNE\partial_zambezia')
+
+#let's do some analysis considering trafo deployment. Eventually, we can have difference distance threshholds.
+power_household = 0.3
+contemporary_coef =0.3
+max_loadibility = 0.6 # in pu
+power_factor=0.9
+kva_400 = 400/power_household/contemporary_coef*max_loadibility*power_factor
+kva_250 = 250/power_household/contemporary_coef*max_loadibility*power_factor
+kva_160 = 160/power_household/contemporary_coef*max_loadibility*power_factor
+kva_100 = 100/power_household/contemporary_coef*max_loadibility*power_factor
+kva_50 = 50/power_household/contemporary_coef*max_loadibility*power_factor
+kva_25 = 25/power_household/contemporary_coef*max_loadibility*power_factor
+
+overall_power = point_gdf.Population.sum()*power_household*contemporary_coef/power_factor/max_loadibility #transformers needed 
+#without considering distance constraint
+
+#Let's try a layered approach going from the most dense areas
+first_layer = point_gdf.loc[point_gdf['Pop_1000']>=1500]
+pop_first_layer = first_layer['Population'].sum()
+second_layer =  point_gdf.loc[point_gdf['Pop_1000']>=900]
+pop_second_layer =  second_layer['Population'].sum()
